@@ -1,0 +1,245 @@
+---
+title: "Breast Cancer: Predictive Analysis with R"
+author: "Team 7: usethia,limdad"
+output: html_document
+---
+
+
+### Importing the data into R as "cancer"
+
+```{r}
+cancer <- read.csv("breast_cancer.csv")
+```
+
+### Converting "Class" variable into a factor, so that R treats it as a categorical variable, instead of a numeric variable.
+
+```{r}
+cancer$Class <- as.factor(cancer$Class)
+```
+
+### 1. Splitting the dataset into 80% training and 20% testing
+
+```{r, message=FALSE}
+library(caret)
+set.seed(23)
+
+# Randomly pick the rows for training partition
+train_rows = createDataPartition(y = cancer$Class,
+                                 p = 0.80, list = FALSE)
+
+cancer_train = cancer[train_rows,]
+cancer_test = cancer[-train_rows,] # "-" means selecting rows *not* included in train_rows
+
+```
+
+
+### 2. Building a decision tree model
+
+```{r, message=FALSE}
+library(rpart)
+
+tree <- rpart(Class ~ ., data = cancer_train,
+             method = "class", 
+             parms = list(split = "information"))
+             control = list(minsplit = 5, maxdepth = 3, cp =0)
+
+```
+
+#The model is stored in the tree object
+
+
+### 3. Plotting the tree, and then answer the following questions:
+```{r}
+set.seed(1)
+library(rpart.plot)
+prp(tree, varlen = 0)
+
+``` 
+
+    - 3.1. How many decision nodes are there in your tree?
+    ## There are 4 decision nodes
+    - 3.2. Pick one decision rule from your tree and interpret it
+    ## If the clump thickness is <7: then cancer is benign else it is malignant 
+    
+## Making predictions
+
+```{r, message=FALSE}
+
+pred_tree = predict(tree, cancer_test, type = "class")
+
+```
+
+
+### 4. Evaluating the performance of your tree. Specifically, report the following metrics: (1) confusion matrix; (2) accuracy; (3) precision, recall, f-measure for "malignant" class; (4) AUC for "malignant" class
+
+
+```{r, message=FALSE}
+
+confusionMatrix(pred_tree, as.factor(cancer_test[,10]), positive= "4")
+tree
+tree$byClass["F1"]
+
+```
+
+- The Accuracy is 0.9259, which indicates that the model will predict accurate results 92.59% of the times and has an error rate of 7.41%.
+- The precision of malignant is PPV = 0.8936= 89.36%
+- Recall for malignant is Sensitivity= 0.8936= 89.36%
+- F Value is 0.893617 = 89.3617%
+
+- We can use the probabilities and ```roc()``` function from pROC package to get the performance
+```{r, message=FALSE}
+library(dplyr)
+
+# get classification probabilities
+pred_tree_prob <- predict(tree, cancer_test, prob = T)
+
+# append the prob of Survived = 1 to the validation/testing set
+cancer_test_roc <- cancer_test %>% 
+  mutate(prob = pred_tree_prob[,2]) %>% 
+  arrange(desc(prob))
+
+library(pROC)
+
+# roc function requires the actual values and the probabilities 
+roc_tree <- roc(response = cancer_test_roc$Class,
+                predictor = cancer_test_roc$prob)
+
+plot(roc_tree, legacy.axes = T, asp = NA)
+
+# get AUC 
+auc(roc_tree)
+
+```
+- AUC is 0.9497= 94.97%
+
+
+#As the range for all the variables fall within 1-10, normalization is not necessary. We only need to normalize data when there is a major difference between the values.
+
+
+### 6. Building a K-NN model and evaluating the performance of K-NN model. Checking if it has a higher or lower AUC than your decision tree model?
+
+```{r,message=FALSE}
+library(class)
+
+pred_knn = knn(train = cancer_train[,1:9],
+               test = cancer_test[,1:9],
+               cl = cancer_train[,10],
+               k = 3)
+
+length(pred_knn)
+
+```
+```{r}
+
+cm <- confusionMatrix(pred_knn, factor(cancer_test[,10]), positive = "4")
+cm
+cm$byClass["F1"]
+
+```
+
+- We get 95.56 % accuracy. This means that the model will predict accurate results 95.56% of the times as opposed to 4.44% times when it might give wrong predictions.
+- The precision of malignant is PPV = 0.9020= 90.02%
+- Recall for malignant is Sensitivity= 0.9787= 97.87%
+- F Value is 0.9387755 = 93.877%
+
+
+```{r}
+knn_model = knn3(Class~.,data = cancer_train, k=3)
+pred_knn3 = predict(knn_model, cancer_test, type="prob")
+roc_knn = roc(response = ifelse(cancer_test$Class == "4", 1, 0),
+predictor = pred_knn3[,2])
+auc(roc_knn)
+```
+- The AUC for KNN model is 0.9707 as opposed to the UC for our decision tree model, which was 0.9497. The AUC for KNN> AUC for decision tree.
+
+
+
+### 7. Trying several different k values (at least 4), report the AUC of each one you tried. Also, reporting which k value gives the highest AUC. We will use loop for this task.
+
+```{r}
+ab = c()
+
+#using the same training and testing data
+for (i in c(2,4,6,5)) {
+    knn_models = knn3(Class~., data=cancer_train, k=i)
+    pred_knns = predict(knn_models, cancer_test, type="prob")
+    roc_knns = roc(response = ifelse(cancer_test$Class == "4", 1, 0),
+    predictor = pred_knns[,2])
+    ab= c(ab, auc(roc_knns))
+}
+print(ab)
+```
+- 
+### 8. Building a naive bayes model, and evaluate its performance on the same testing data. Checking if it has a higher or lower AUC than our best decision tree and k-NN models.
+```{r,warning=FALSE,message=FALSE}
+library(e1071)
+library(funModeling)
+
+nb_model <- naiveBayes(Class ~ . , data = cancer_train)
+
+```
+
+```{r}
+pred_nb <- predict(nb_model, cancer_test)
+
+# we can also obtain class probability predictions
+pred_nb_prob <- predict(nb_model, cancer_test, type= "raw")
+
+```
+
+```{r}
+
+cm <- confusionMatrix(pred_nb, as.factor(cancer_test$Class), mode = "prec_recall", positive="4")
+cm
+
+```
+- Gives accuracy of 0.9556, which implies that the model will be accurate 95.56% of the times.
+
+
+## Making ROC Curve for Class "Malignant"
+
+```{r,warning=FALSE,message=FALSE}
+library(dplyr)
+
+cancer_test_roc <- cancer_test %>% 
+  mutate(prob = pred_nb_prob[,2]) %>% 
+  arrange(desc(prob)) %>% 
+  mutate(malignant = ifelse(Class == "4", 1, 0))
+```
+
+
+- The ```pROC``` package provides useful functions to make ROC plots and calculate AUC
+```{r,warning=FALSE,message=FALSE}
+library(pROC)
+roc_nb <- roc(response = cancer_test_roc$malignant,
+              predictor = cancer_test_roc$prob)
+
+plot(roc_nb, legacy.axes = T, asp = NA)
+
+
+```
+
+## Calculating AUC
+
+```{r}
+auc(roc_nb)
+```
+- AUC is 0.9857 for Naive Bayes Model. Which is the highest among all the AUCs calculated so far.
+
+
+### 9. Taking our best model in terms of AUC, and plotting the lift curve. 
+
+```{r}
+# Our best model in terms of AUC is the naive bayes model
+
+gain_lift(data = cancer_test_roc, score = "prob", target = "malignant")
+
+```
+
+- The lift ratio at top 10% of cases with highest "malignant" probability is 93%
+
+### 10. Again taking your best model in terms of AUC, and plotting the ROC curve for class "malignant".
+```{r}
+plot(roc_knn, legacy.axes = T, asp= NA)
+```
+
